@@ -10,6 +10,34 @@ from figma_client import FigmaClient, FigmaError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+CLIENTS_PATH = os.path.join(BASE_DIR, "clientes.json")
+
+
+def load_clients() -> Dict[str, str]:
+    clients = {}
+    if os.path.exists(CLIENTS_PATH):
+        try:
+            with open(CLIENTS_PATH, "r", encoding="utf-8") as f:
+                clients = json.load(f)
+        except Exception:
+            clients = {}
+    # Também checa se há clientes pré-definidos em st.secrets
+    try:
+        if hasattr(st, "secrets") and "clients" in st.secrets:
+            for k, v in st.secrets["clients"].items():
+                if k not in clients:
+                    clients[k] = v
+    except Exception:
+        pass
+    return clients
+
+
+def save_clients(clients: Dict[str, str]) -> None:
+    try:
+        with open(CLIENTS_PATH, "w", encoding="utf-8") as f:
+            json.dump(clients, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Erro ao salvar lista de clientes: {e}")
 
 
 def load_local_config() -> Dict:
@@ -278,27 +306,86 @@ with st.sidebar:
     )
 
 # =============================================================================
-# PASSO 1: CARREGAR PROJETO DO FIGMA
+# PASSO 1: CARREGAR PROJETO DO FIGMA (CARTELA OU LINK MANUAL)
 # =============================================================================
 st.markdown(
     """
     <div class="step-card">
         <span class="step-tag">PASSO 1</span>
-        <div class="step-title">Link do Arquivo no Figma</div>
+        <div class="step-title">Selecionar Cliente ou Link do Figma</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-c1, c2 = st.columns([5, 1])
-with c1:
-    figma_url = st.text_input(
-        "URL do Figma",
-        placeholder="https://www.figma.com/design/XXXXX/Nome-do-Cliente...",
-        label_visibility="collapsed",
-    )
-with c2:
-    load_btn = st.button("🔍 Carregar", use_container_width=True, type="primary")
+clients = load_clients()
+has_clients = len(clients) > 0
+
+input_mode = st.radio(
+    "Como deseja selecionar o projeto?",
+    options=["🏢 Escolher da Cartela de Clientes", "🔗 Inserir Link Manualmente"],
+    index=0 if has_clients else 1,
+    horizontal=True,
+)
+
+figma_url = ""
+load_btn = False
+
+if input_mode == "🏢 Escolher da Cartela de Clientes":
+    if not has_clients:
+        st.info("ℹ️ Sua cartela de clientes ainda está vazia! Escolha 'Inserir Link Manualmente' para colar o primeiro link ou cadastre no painel abaixo.")
+    else:
+        client_options = sorted(list(clients.keys()))
+        c_pick, c_btn = st.columns([5, 1])
+        with c_pick:
+            chosen_client = st.selectbox(
+                "Selecione o Cliente:",
+                options=client_options,
+                label_visibility="collapsed",
+            )
+            figma_url = clients.get(chosen_client, "")
+            st.caption(f"🔗 Link associado: `{figma_url}`")
+        with c_btn:
+            load_btn = st.button("🔍 Carregar", use_container_width=True, type="primary")
+else:
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        figma_url = st.text_input(
+            "URL do Figma",
+            placeholder="https://www.figma.com/design/XXXXX/Nome-do-Cliente...",
+            label_visibility="collapsed",
+        )
+    with c2:
+        load_btn = st.button("🔍 Carregar", use_container_width=True, type="primary")
+
+# Painel de Gerenciamento da Cartela de Clientes
+with st.expander("⚙️ Gerenciar Cartela de Clientes (Adicionar / Excluir)"):
+    m_col1, m_col2 = st.columns([1, 1])
+    with m_col1:
+        st.markdown("**➕ Adicionar Novo Cliente:**")
+        new_cli_name = st.text_input("Nome do Cliente (ex: PADARIA SÃO JOSÉ):", key="new_cli_name")
+        new_cli_url = st.text_input("Link do Figma do Projeto:", key="new_cli_url", placeholder="https://www.figma.com/design/...")
+        if st.button("💾 Salvar na Cartela"):
+            if new_cli_name.strip() and new_cli_url.strip():
+                clients[new_cli_name.strip().upper()] = new_cli_url.strip()
+                save_clients(clients)
+                st.success(f"Cliente '{new_cli_name.strip().upper()}' salvo na cartela com sucesso!")
+                st.rerun()
+            else:
+                st.warning("Preencha o nome do cliente e o link do Figma.")
+
+    with m_col2:
+        st.markdown("**🗑️ Clientes Cadastrados:**")
+        if not clients:
+            st.caption("Nenhum cliente cadastrado ainda.")
+        else:
+            del_client = st.selectbox("Selecione um cliente para remover:", options=sorted(list(clients.keys())), key="del_cli_box")
+            if st.button("❌ Remover Cliente"):
+                if del_client in clients:
+                    del clients[del_client]
+                    save_clients(clients)
+                    st.success(f"Cliente '{del_client}' removido com sucesso!")
+                    st.rerun()
 
 if load_btn and figma_url:
     token = st.session_state.config.get("figma_token", "").strip()
@@ -352,6 +439,14 @@ if st.session_state.file_data:
             value=default_client_name,
             help="Nome da pasta do cliente dentro de 01 - Clientes ativos.",
         )
+        # Se este cliente ainda não está na cartela, oferece salvá-lo com 1 clique
+        loaded_key = file_data.get("file_key", "")
+        if client_name and client_name not in clients and loaded_key:
+            if st.button("💾 Salvar na Cartela", key="btn_quick_save_preset"):
+                clients[client_name] = f"https://www.figma.com/design/{loaded_key}"
+                save_clients(clients)
+                st.success(f"'{client_name}' salvo na cartela com sucesso!")
+                st.rerun()
 
     with col_page:
         current_page_idx = 0
