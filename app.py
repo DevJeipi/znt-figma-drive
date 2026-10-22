@@ -1071,11 +1071,18 @@ class FigmaToDriveApp(ctk.CTk):
                 figma = FigmaClient(token)
                 file_key = self.current_file_data["file_key"]
                 node_ids = [f["id"] for f in selected_frames]
+
+                def on_render_progress(b_idx, total_b, b_len):
+                    prog = 0.25 + (0.2 * (b_idx / total_b))
+                    self._set_status(f"Renderizando lote {b_idx}/{total_b} no Figma ({b_len} artes)...", prog)
+
                 image_urls = figma.get_image_urls(
                     file_key=file_key,
                     node_ids=node_ids,
                     img_format=img_format,
                     scale=scale,
+                    batch_size=5,
+                    progress_callback=on_render_progress,
                 )
 
                 # Passo 3: Baixar e Enviar para as subpastas

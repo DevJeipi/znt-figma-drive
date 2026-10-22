@@ -619,11 +619,19 @@ if st.session_state.file_data:
                 figma = FigmaClient(token)
                 file_key = file_data["file_key"]
                 node_ids = [f["id"] for f in selected_frames]
+
+                def render_callback(b_idx, total_b, b_len):
+                    sub_prog = int(25 + (20 * (b_idx / total_b)))
+                    progress_bar.progress(sub_prog)
+                    status_text.info(f"Renderizando lote {b_idx}/{total_b} no Figma ({b_len} artes)...")
+
                 image_urls = figma.get_image_urls(
                     file_key=file_key,
                     node_ids=node_ids,
                     img_format=img_format.lower(),
                     scale=scale,
+                    batch_size=5,
+                    progress_callback=render_callback,
                 )
 
                 # Passo 3: Envio de cada imagem

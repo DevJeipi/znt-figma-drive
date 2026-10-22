@@ -300,60 +300,93 @@ class FigmaClient:
         else:
             return self.assign_post_groups(frames)
 
+    def _fetch_single_batch(
+        self,
+        file_key: str,
+        batch_ids: List[str],
+        img_format: str,
+        scale: float,
+        timeout: int = 120,
+    ) -> Dict[str, str]:
+        ids_param = ",".join(batch_ids)
+        url = f"{self.BASE_URL}/images/{file_key}"
+        params = {
+            "ids": ids_param,
+            "format": img_format.lower(),
+            "scale": scale,
+        }
+        resp = requests.get(url, headers=self.headers, params=params, timeout=timeout)
+        if resp.status_code == 429:
+            import time
+            time.sleep(3)
+            resp = requests.get(url, headers=self.headers, params=params, timeout=timeout)
+
+        if resp.status_code != 200:
+            raise FigmaError(f"Erro ao exportar imagens ({resp.status_code}): {resp.text}")
+
+        body = resp.json()
+        if body.get("err"):
+            raise FigmaError(f"Erro retornado pelo Figma: {body['err']}")
+
+        images = body.get("images", {})
+        return {nid: img_url for nid, img_url in images.items() if img_url}
+
     def get_image_urls(
         self,
         file_key: str,
         node_ids: List[str],
         img_format: str = "png",
         scale: float = 2.0,
+        batch_size: int = 5,
+        progress_callback: Optional[callable] = None,
     ) -> Dict[str, str]:
         """
         Solicita ao Figma a renderização dos frames e retorna um dicionário {node_id: image_url}.
-        Faz em lotes de 20 para evitar timeout em páginas com muitos posts.
+        Utiliza lotes menores (padrão 5) e retry automático inteligente para evitar timeouts em artes pesadas.
         """
         if not node_ids:
             return {}
 
         result_urls: Dict[str, str] = {}
-        batch_size = 20
+        total_batches = (len(node_ids) + batch_size - 1) // batch_size
 
-        for i in range(0, len(node_ids), batch_size):
+        for b_idx, i in enumerate(range(0, len(node_ids), batch_size), start=1):
             batch = node_ids[i:i + batch_size]
-            ids_param = ",".join(batch)
-            url = f"{self.BASE_URL}/images/{file_key}"
-            params = {
-                "ids": ids_param,
-                "format": img_format.lower(),
-                "scale": scale,
-            }
+            if progress_callback:
+                progress_callback(b_idx, total_batches, len(batch))
+
             try:
-                resp = requests.get(url, headers=self.headers, params=params, timeout=90)
-            except requests.RequestException as exc:
-                raise FigmaError(f"Erro ao renderizar imagens no Figma: {exc}") from exc
-
-            if resp.status_code != 200:
-                raise FigmaError(f"Erro ao exportar imagens ({resp.status_code}): {resp.text}")
-
-            body = resp.json()
-            if body.get("err"):
-                raise FigmaError(f"Erro retornado pelo Figma: {body['err']}")
-
-            images = body.get("images", {})
-            for nid, img_url in images.items():
-                if img_url:
-                    result_urls[nid] = img_url
+                urls = self._fetch_single_batch(file_key, batch, img_format, scale, timeout=120)
+                result_urls.update(urls)
+            except Exception as exc:
+                # Se falhar o lote de 5 (arte pesada com timeout), divide e tenta 1 por 1
+                import time
+                time.sleep(2)
+                for single_id in batch:
+                    try:
+                        urls = self._fetch_single_batch(file_key, [single_id], img_format, scale, timeout=90)
+                        result_urls.update(urls)
+                    except Exception as sub_exc:
+                        raise FigmaError(
+                            f"O Figma demorou demais para renderizar esta arte pesada. "
+                            f"Dica: tente exportar em JPG ou escala 1x. Detalhes: {sub_exc}"
+                        ) from sub_exc
 
         return result_urls
 
     @staticmethod
-    def download_image_bytes(image_url: str) -> bytes:
-        """Baixa os bytes da imagem renderizada pelo Figma."""
-        try:
-            resp = requests.get(image_url, timeout=60)
-            resp.raise_for_status()
-            return resp.content
-        except requests.RequestException as exc:
-            raise FigmaError(f"Falha ao baixar imagem renderizada: {exc}") from exc
+    def download_image_bytes(image_url: str, retries: int = 2) -> bytes:
+        """Baixa os bytes da imagem renderizada pelo Figma com retry em caso de instabilidade."""
+        for attempt in range(retries + 1):
+            try:
+                resp = requests.get(image_url, timeout=60)
+                resp.raise_for_status()
+                return resp.content
+            except requests.RequestException as exc:
+                if attempt == retries:
+                    raise FigmaError(f"Falha ao baixar imagem renderizada: {exc}") from exc
+                import time
+                time.sleep(1.5)
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
