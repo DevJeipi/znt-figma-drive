@@ -1,0 +1,14 @@
+# Ambientes virtuais
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Segredos e Tokens Privados (nunca sobem para o GitHub)
+credentials.json
+credentials.json.json
+token.json
+.streamlit/secrets.toml
+
+# Configurações locais temporárias
+config.json
